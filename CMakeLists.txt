@@ -3,9 +3,7 @@ project(xi C)
 
 set(CMAKE_C_STANDARD 99)
 
-find_package(Curses REQUIRED)
-include_directories(${CURSES_INCLUDE_DIR})
-
-add_executable(xi src/main.c)
-
-target_link_libraries(xi ${CURSES_LIBRARIES})
+include_directories(deps/termbox2)
+add_executable(xi
+        src/main.c
+        src/editor.c src/editor.h)
