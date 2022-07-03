@@ -13,6 +13,7 @@ typedef struct {
     char *path; // File we're editing, or NULL if it hasn't been saved yet
     int scroll_x, scroll_y;
     int cursor_x, cursor_y; // Absolute position within 'lines'
+    int prev_cursor_x; // Used when moving cursor up/down lines
     Line **lines;
     int num_lines, max_lines;
     int run;

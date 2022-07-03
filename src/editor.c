@@ -43,18 +43,19 @@ static void line_increase_capacity(Editor *e, int line_idx, int more) {
 }
 
 Editor editor_new() {
-    Editor editor;
-    editor.path = NULL;
-    editor.scroll_x = 0;
-    editor.scroll_y = 0;
-    editor.cursor_x = 0;
-    editor.cursor_y = 0;
-    editor.num_lines = 0;
-    editor.max_lines = 16;
-    editor.lines = malloc(sizeof(Line) * editor.max_lines);
-    editor.lines[editor.num_lines++] = line_empty();
-    editor.run = 1;
-    return editor;
+    Editor e;
+    e.path = NULL;
+    e.scroll_x = 0;
+    e.scroll_y = 0;
+    e.cursor_x = 0;
+    e.cursor_y = 0;
+    e.prev_cursor_x = -1;
+    e.num_lines = 0;
+    e.max_lines = 16;
+    e.lines = malloc(sizeof(Line) * e.max_lines);
+    e.lines[e.num_lines++] = line_empty();
+    e.run = 1;
+    return e;
 }
 
 static void editor_increase_lines_capacity(Editor *e, int more) {
@@ -98,7 +99,7 @@ Editor editor_open(char *path) {
 
 // ---- Drawing ---------------------------------------------------------------
 
-static void editor_set_cursor(Editor *e) {
+static void editor_draw_cursor(Editor *e) {
     int rel_x = e->cursor_x - e->scroll_x;
     int rel_y = e->cursor_y - e->scroll_y;
     tb_set_cursor(rel_x, rel_y);
@@ -130,12 +131,17 @@ void editor_draw(Editor *e) {
     for (int y = 0; y < height; y++) {
         editor_draw_line(e, y);
     }
-    editor_set_cursor(e);
+    editor_draw_cursor(e);
     tb_present();
 }
 
 
 // ---- Events ----------------------------------------------------------------
+
+static void cursor_set_x(Editor *e, int x) {
+    e->cursor_x = x;
+    e->prev_cursor_x = -1;
+}
 
 static void editor_correct_horizontal_scroll(Editor *e) {
     int width = tb_width();
@@ -161,18 +167,18 @@ static void editor_correct_scroll(Editor *e) {
 }
 
 static void editor_cursor_start_of_line(Editor *e) {
-    e->cursor_x = 0;
+    cursor_set_x(e, 0);
     editor_correct_horizontal_scroll(e);
 }
 
 static void editor_cursor_end_of_line(Editor *e) {
     Line *line = e->lines[e->cursor_y];
-    e->cursor_x = line->len;
+    cursor_set_x(e, line->len);
     editor_correct_horizontal_scroll(e);
 }
 
 static void editor_cursor_start_of_file(Editor *e) {
-    e->cursor_x = 0;
+    cursor_set_x(e, 0);
     e->cursor_y = 0;
     editor_correct_scroll(e);
 }
@@ -180,7 +186,7 @@ static void editor_cursor_start_of_file(Editor *e) {
 static void editor_cursor_end_of_file(Editor *e) {
     e->cursor_y = e->num_lines - 1;
     Line *line = e->lines[e->cursor_y];
-    e->cursor_x = line->len;
+    cursor_set_x(e, line->len);
     editor_correct_scroll(e);
 }
 
@@ -192,7 +198,7 @@ static void editor_cursor_left(Editor *e) {
         e->cursor_y--;
         editor_cursor_end_of_line(e);
     } else {
-        e->cursor_x--;
+        cursor_set_x(e, e->cursor_x - 1);
         editor_correct_horizontal_scroll(e);
     }
 }
@@ -206,17 +212,22 @@ static void editor_cursor_right(Editor *e) {
         e->cursor_y++;
         editor_cursor_start_of_line(e);
     } else {
-        e->cursor_x++;
+        cursor_set_x(e, e->cursor_x + 1);
         editor_correct_horizontal_scroll(e);
     }
 }
 
-static void editor_correct_cursor_if_beyond_eol(Editor *e) {
+static void editor_set_cursor_on_line_movement(Editor *e) {
+    if (e->prev_cursor_x == -1) {
+        e->prev_cursor_x = e->cursor_x;
+    } else {
+        e->cursor_x = e->prev_cursor_x;
+    }
     Line *line = e->lines[e->cursor_y];
     if (e->cursor_x > line->len) {
         e->cursor_x = line->len;
-        editor_correct_horizontal_scroll(e);
     }
+    editor_correct_scroll(e);
 }
 
 static void editor_cursor_up(Editor *e) {
@@ -224,8 +235,7 @@ static void editor_cursor_up(Editor *e) {
         return; // First line in file
     }
     e->cursor_y--;
-    editor_correct_vertical_scroll(e);
-    editor_correct_cursor_if_beyond_eol(e);
+    editor_set_cursor_on_line_movement(e);
 }
 
 static void editor_cursor_down(Editor *e) {
@@ -233,8 +243,7 @@ static void editor_cursor_down(Editor *e) {
         return; // Last line in file
     }
     e->cursor_y++;
-    editor_correct_vertical_scroll(e);
-    editor_correct_cursor_if_beyond_eol(e);
+    editor_set_cursor_on_line_movement(e);
 }
 
 static int is_word_sep(char ch) {
@@ -273,7 +282,7 @@ static int editor_find_prev_word_on_line(Editor *e) {
 
 static void editor_cursor_prev_word(Editor *e) {
     if (e->cursor_x > 0) {
-        e->cursor_x = editor_find_prev_word_on_line(e);
+        cursor_set_x(e, editor_find_prev_word_on_line(e));
         editor_correct_horizontal_scroll(e);
     } else {
         if (e->cursor_y == 0) {
@@ -281,8 +290,8 @@ static void editor_cursor_prev_word(Editor *e) {
         }
         e->cursor_y--; // Previous word on the line above
         Line *line = e->lines[e->cursor_y];
-        e->cursor_x = line->len;
-        e->cursor_x = editor_find_prev_word_on_line(e);
+        cursor_set_x(e, line->len);
+        cursor_set_x(e, editor_find_prev_word_on_line(e));
         editor_correct_scroll(e);
     }
 }
@@ -313,15 +322,15 @@ static int editor_find_next_word_on_line(Editor *e) {
 static void editor_cursor_next_word(Editor *e) {
     Line *line = e->lines[e->cursor_y];
     if (e->cursor_x < line->len) {
-        e->cursor_x = editor_find_next_word_on_line(e);
+        cursor_set_x(e, editor_find_next_word_on_line(e));
         editor_correct_horizontal_scroll(e);
     } else {
         if (e->cursor_y >= e->num_lines - 1) {
             return; // End of file
         }
         e->cursor_y++; // Next word on the line below
-        e->cursor_x = 0;
-        e->cursor_x = editor_find_next_word_on_line(e);
+        cursor_set_x(e, 0);
+        cursor_set_x(e, editor_find_next_word_on_line(e));
         editor_correct_scroll(e);
     }
 }
@@ -357,7 +366,7 @@ static void editor_insert_character(Editor *e, char ch) {
     }
     line->s[e->cursor_x] = ch;
     line->len++;
-    e->cursor_x++;
+    cursor_set_x(e, e->cursor_x + 1);
     editor_correct_horizontal_scroll(e);
 }
 
@@ -373,7 +382,7 @@ static void editor_new_line(Editor *e) {
     line->len = e->cursor_x;
     editor_insert_line(e, e->cursor_y, to_insert);
     e->cursor_y++;
-    e->cursor_x = 0;
+    cursor_set_x(e, 0);
     editor_correct_scroll(e);
 }
 
@@ -385,7 +394,7 @@ static void editor_backspace(Editor *e) {
         }
         line_increase_capacity(e, e->cursor_y - 1, line->len);
         Line *prev = e->lines[e->cursor_y - 1];
-        e->cursor_x = prev->len;
+        cursor_set_x(e, prev->len);
         memcpy(&prev->s[prev->len], line->s, sizeof(char) * line->len);
         prev->len += line->len;
         editor_delete_line(e, e->cursor_y);
@@ -398,7 +407,7 @@ static void editor_backspace(Editor *e) {
             memcpy(dst - 1, dst, sizeof(char) * remaining);
         }
         line->len--;
-        e->cursor_x--;
+        cursor_set_x(e, e->cursor_x - 1);
         editor_correct_horizontal_scroll(e);
     }
 }
