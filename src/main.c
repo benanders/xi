@@ -3,6 +3,8 @@
 #include <termbox.h>
 #include <math.h>
 
+#define WORD_SEPARATORS "./\\()\"'-:,.;<>~!@#$%^&*|+=[]{}`~?"
+
 typedef struct {
     int len, max;
     char s[];
@@ -11,7 +13,7 @@ typedef struct {
 typedef struct {
     char *path; // File we're editing, or NULL if it hasn't been saved yet
     int scroll_x, scroll_y;
-    int cursor_x, cursor_y;
+    int cursor_x, cursor_y; // Absolute position within 'lines'
     Line **lines;
     int num_lines, max_lines;
 } Editor;
@@ -179,6 +181,91 @@ static void editor_cursor_down(Editor *e) {
     editor_correct_cursor_if_beyond_eol(e);
 }
 
+static int is_word_sep(char ch) {
+    for (char *sep = WORD_SEPARATORS; *sep != '\0'; sep++) {
+        if (ch == *sep) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int editor_find_prev_word_on_line(Editor *e) {
+    // 1. Go back one character
+    // 2. Skip all whitespace
+    // 3. If the character is not a word separator, keep going back until we
+    //    find a word separator or whitespace, then add one
+    // 4. If the character is a word separator, keep going back until we find
+    //    a not word separator or whitespace, then add one
+    if (e->cursor_x == 0) {
+        return 0;
+    }
+    Line *line = e->lines[e->cursor_y];
+    int x = e->cursor_x - 1; // 1
+    while (isspace(line->s[x]) && x >= 0) { // 2
+        x--;
+    }
+    int sep = is_word_sep(line->s[x]);
+    while (is_word_sep(line->s[x]) == sep && !isspace(line->s[x]) && x >= 0) {
+        x--; // 3 + 4
+    }
+    x++;
+    return x;
+}
+
+static void editor_cursor_prev_word(Editor *e) {
+    if (e->cursor_x > 0) {
+        e->cursor_x = editor_find_prev_word_on_line(e);
+        editor_correct_horizontal_scroll(e);
+    } else {
+        if (e->cursor_y == 0) {
+            return; // Start of file
+        }
+        e->cursor_y--; // Previous word on the line above
+        Line *line = e->lines[e->cursor_y];
+        e->cursor_x = line->len;
+        e->cursor_x = editor_find_prev_word_on_line(e);
+        editor_correct_scroll(e);
+    }
+}
+
+static int editor_find_next_word_on_line(Editor *e) {
+    // 1. Skip all whitespace
+    // 2. If the character is not a word separator, keep going forward until we
+    //    find a word separator or whitespace
+    // 3. If the character is a word separator, keep going forward until we find
+    //    a not word separator or whitespace
+    Line *line = e->lines[e->cursor_y];
+    if (e->cursor_x >= line->len) {
+        return line->len;
+    }
+    int x = e->cursor_x; // 1
+    while (isspace(line->s[x]) && x < line->len) { // 2
+        x++;
+    }
+    int sep = is_word_sep(line->s[x]);
+    while (is_word_sep(line->s[x]) == sep && !isspace(line->s[x]) && x < line->len) {
+        x++; // 3 + 4
+    }
+    return x;
+}
+
+static void editor_cursor_next_word(Editor *e) {
+    Line *line = e->lines[e->cursor_y];
+    if (e->cursor_x < line->len) {
+        e->cursor_x = editor_find_next_word_on_line(e);
+        editor_correct_horizontal_scroll(e);
+    } else {
+        if (e->cursor_y >= e->num_lines - 1) {
+            return; // End of file
+        }
+        e->cursor_y++; // Next word on the line below
+        e->cursor_x = 0;
+        e->cursor_x = editor_find_next_word_on_line(e);
+        editor_correct_scroll(e);
+    }
+}
+
 static void editor_increase_line_capacity(Editor *e, int line_idx, int more) {
     Line *line = e->lines[line_idx];
     if (line->len + more > line->max) {
@@ -270,7 +357,38 @@ static void editor_backspace(Editor *e) {
     }
 }
 
+static void editor_shift_line_up(Editor *e) {
+    if (e->cursor_y == 0) {
+        return; // First line
+    }
+    Line *swap = e->lines[e->cursor_y - 1];
+    e->lines[e->cursor_y - 1] = e->lines[e->cursor_y];
+    e->lines[e->cursor_y] = swap;
+    e->cursor_y--;
+}
+
+static void editor_shift_line_down(Editor *e) {
+    if (e->cursor_y >= e->num_lines - 1) {
+        return; // Last line
+    }
+    Line *swap = e->lines[e->cursor_y + 1];
+    e->lines[e->cursor_y + 1] = e->lines[e->cursor_y];
+    e->lines[e->cursor_y] = swap;
+    e->cursor_y++;
+}
+
 static void editor_key(Editor *e, struct tb_event ev) {
+    if (ev.mod == TB_MOD_ALT) {
+        switch (ev.key) {
+            // Movement
+            case TB_KEY_ARROW_LEFT:  editor_cursor_prev_word(e); return;
+            case TB_KEY_ARROW_RIGHT: editor_cursor_next_word(e); return;
+
+            // Editing
+            case TB_KEY_ARROW_UP:    editor_shift_line_up(e); return;
+            case TB_KEY_ARROW_DOWN:  editor_shift_line_down(e); return;
+        }
+    } // Otherwise, fall through to the non-alt command...
     switch (ev.key) {
         // Movement
         case TB_KEY_ARROW_LEFT:  editor_cursor_left(e); break;
