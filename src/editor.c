@@ -122,6 +122,19 @@ static void editor_cursor_end_of_line(Editor *e) {
     editor_correct_horizontal_scroll(e);
 }
 
+static void editor_cursor_start_of_file(Editor *e) {
+    e->cursor_x = 0;
+    e->cursor_y = 0;
+    editor_correct_scroll(e);
+}
+
+static void editor_cursor_end_of_file(Editor *e) {
+    e->cursor_y = e->num_lines - 1;
+    Line *line = e->lines[e->cursor_y];
+    e->cursor_x = line->len;
+    editor_correct_scroll(e);
+}
+
 static void editor_cursor_left(Editor *e) {
     if (e->cursor_x == 0) {
         if (e->cursor_y == 0) {
@@ -385,6 +398,14 @@ static void editor_key(Editor *e, struct tb_event ev) {
             // Editing
             case TB_KEY_ARROW_UP:    editor_shift_line_up(e); return;
             case TB_KEY_ARROW_DOWN:  editor_shift_line_down(e); return;
+        }
+    } else if (ev.mod == TB_MOD_CTRL) {
+        switch (ev.key) {
+            // Movement
+            case TB_KEY_ARROW_LEFT:  editor_cursor_start_of_line(e); return;
+            case TB_KEY_ARROW_RIGHT: editor_cursor_end_of_line(e); return;
+            case TB_KEY_ARROW_UP:    editor_cursor_start_of_file(e); return;
+            case TB_KEY_ARROW_DOWN:  editor_cursor_end_of_file(e); return;
         }
     } // Otherwise, fall through to the non-alt command...
     switch (ev.key) {
