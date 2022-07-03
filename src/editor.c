@@ -31,6 +31,17 @@ static Line * line_from(char *str, int len) {
     return line;
 }
 
+static void line_increase_capacity(Editor *e, int line_idx, int more) {
+    Line *line = e->lines[line_idx];
+    if (line->len + more > line->max) {
+        while (line->len + more > line->max) {
+            line->max *= 2;
+        }
+        line = realloc(line, sizeof(Line) + sizeof(char) * line->max);
+        e->lines[line_idx] = line;
+    }
+}
+
 Editor editor_new() {
     Editor editor;
     editor.path = NULL;
@@ -38,12 +49,50 @@ Editor editor_new() {
     editor.scroll_y = 0;
     editor.cursor_x = 0;
     editor.cursor_y = 0;
-    editor.num_lines = 1;
+    editor.num_lines = 0;
     editor.max_lines = 16;
     editor.lines = malloc(sizeof(Line) * editor.max_lines);
-    editor.lines[0] = line_empty();
+    editor.lines[editor.num_lines++] = line_empty();
     editor.run = 1;
     return editor;
+}
+
+static void editor_increase_lines_capacity(Editor *e, int more) {
+    if (e->num_lines + more > e->max_lines) {
+        while (e->num_lines + more > e->max_lines) {
+            e->max_lines *= 2;
+        }
+        e->lines = realloc(e->lines, sizeof(Line **) * e->max_lines);
+    }
+}
+
+Editor editor_open(char *path) {
+    Editor e = editor_new();
+    e.path = path;
+
+    FILE *file = fopen(path, "r");
+    if (!file) { // File hasn't been created yet
+        return e;
+    }
+
+    char line_buf[256];
+    while (fgets(line_buf, sizeof(line_buf), file)) {
+        int len = (int) strlen(line_buf);
+        line_increase_capacity(&e, e.num_lines - 1, len);
+        Line *line = e.lines[e.num_lines - 1];
+        if (line_buf[len - 1] == '\n' || line_buf[len - 1] == '\r') { // EOL
+            strncpy(&line->s[line->len], line_buf, len - 1); // Skip newline
+            line->len += len - 1;
+            editor_increase_lines_capacity(&e, 1); // Next line
+            e.lines[e.num_lines++] = line_empty();
+        } else { // More line to come
+            strncpy(&line->s[line->len], line_buf, len);
+            line->len += len;
+        }
+    }
+    fclose(file);
+    e.num_lines--; // Delete the last new line added
+    return e;
 }
 
 
@@ -277,17 +326,6 @@ static void editor_cursor_next_word(Editor *e) {
     }
 }
 
-static void editor_increase_line_capacity(Editor *e, int line_idx, int more) {
-    Line *line = e->lines[line_idx];
-    if (line->len + more > line->max) {
-        while (line->len + more > line->max) {
-            line->max *= 2;
-        }
-        line = realloc(line, sizeof(Line) + sizeof(char) * line->max);
-        e->lines[line_idx] = line;
-    }
-}
-
 static void editor_delete_line(Editor *e, int line_idx) {
     free(e->lines[line_idx]);
     int remaining = e->num_lines - line_idx - 1;
@@ -299,10 +337,7 @@ static void editor_delete_line(Editor *e, int line_idx) {
 }
 
 static void editor_insert_line(Editor *e, int after_idx, Line *to_insert) {
-    if (e->num_lines >= e->max_lines) {
-        e->max_lines *= 2;
-        e->lines = realloc(e->lines, sizeof(Line **) * e->max_lines);
-    }
+    editor_increase_lines_capacity(e, 1);
     int remaining = e->num_lines - after_idx - 1;
     if (remaining > 0) {
         Line **src = &e->lines[after_idx + 1];
@@ -313,7 +348,7 @@ static void editor_insert_line(Editor *e, int after_idx, Line *to_insert) {
 }
 
 static void editor_insert_character(Editor *e, char ch) {
-    editor_increase_line_capacity(e, e->cursor_y, 1);
+    line_increase_capacity(e, e->cursor_y, 1);
     Line *line = e->lines[e->cursor_y];
     int remaining = line->len - e->cursor_x;
     if (remaining > 0) {
@@ -348,7 +383,7 @@ static void editor_backspace(Editor *e) {
         if (e->cursor_y == 0) {
             return; // Start of file
         }
-        editor_increase_line_capacity(e, e->cursor_y - 1, line->len);
+        line_increase_capacity(e, e->cursor_y - 1, line->len);
         Line *prev = e->lines[e->cursor_y - 1];
         e->cursor_x = prev->len;
         memcpy(&prev->s[prev->len], line->s, sizeof(char) * line->len);

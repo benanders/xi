@@ -19,6 +19,7 @@ typedef struct {
 } Editor;
 
 Editor editor_new();
+Editor editor_open(char *path);
 void editor_draw(Editor *e);
 void editor_update(Editor *e, struct tb_event ev);
 
