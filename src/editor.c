@@ -17,8 +17,8 @@ static Theme default_theme() {
     t.selection_fg = TB_BLACK;
     t.selection_bg = TB_WHITE;
     t.highlight_line = 1;
-    t.highlight_fg = TB_BLACK;
-    t.highlight_bg = TB_WHITE;
+    t.highlight_fg = TB_DEFAULT;
+    t.highlight_bg = TB_DEFAULT;
     t.show_gutter = 1;
     t.gutter_fg = TB_YELLOW;
     t.gutter_bg = TB_DEFAULT;
@@ -201,6 +201,11 @@ static void draw_line(Editor *e, int y) {
         if (is_in_selection(e, ch_idx, line_idx)) {
             fg = e->theme.selection_fg;
             bg = e->theme.selection_bg;
+        } else if (e->theme.highlight_line &&
+                   !has_selection(e) && // Don't highlight line if selection
+                   line_idx == e->cursor_y) {
+            fg = e->theme.highlight_fg;
+            bg = e->theme.highlight_bg;
         } else {
             fg = e->theme.text_fg;
             bg = e->theme.text_bg;
