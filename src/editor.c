@@ -101,8 +101,38 @@ Editor editor_open(char *path) {
 
 // ---- Drawing ---------------------------------------------------------------
 
+static int has_selection(Editor *e) {
+    return e->select_x != -1 && e->select_y != -1;
+}
+
+static void selection_range(Editor *e,
+                            int *min_x, int *min_y,
+                            int *max_x, int *max_y) {
+    if (!has_selection(e)) {
+        if (min_x) { *min_x = -1; }
+        if (min_y) { *min_y = -1; }
+        if (max_x) { *max_x = -1; }
+        if (max_y) { *max_y = -1; }
+        return;
+    }
+    int y1 = e->select_y < e->cursor_y ? e->select_y : e->cursor_y;
+    int y2 = e->select_y > e->cursor_y ? e->select_y : e->cursor_y;
+    int x1, x2;
+    if (y1 == y2) { // Selection all on one line
+        x1 = e->select_x < e->cursor_x ? e->select_x : e->cursor_x;
+        x2 = e->select_x > e->cursor_x ? e->select_x : e->cursor_x;
+    } else { // Selection on multiple lines
+        x1 = y1 == e->select_y ? e->select_x : e->cursor_x;
+        x2 = y2 == e->select_y ? e->select_x : e->cursor_x;
+    }
+    if (min_x) { *min_x = x1; }
+    if (min_y) { *min_y = y1; }
+    if (max_x) { *max_x = x2; }
+    if (max_y) { *max_y = y2; }
+}
+
 static void draw_cursor(Editor *e) {
-    if (e->select_x != -1 || e->select_y != -1) {
+    if (has_selection(e)) {
         tb_hide_cursor(); // Don't draw the cursor in selection mode
         return;
     }
@@ -112,19 +142,11 @@ static void draw_cursor(Editor *e) {
 }
 
 static int is_in_selection(Editor *e, int ch_idx, int line_idx) {
-    if (e->select_x == -1 || e->select_y == -1) { // No selection
+    if (!has_selection(e)) { // No selection
         return 0;
     }
-    int min_y = e->select_y < e->cursor_y ? e->select_y : e->cursor_y;
-    int max_y = e->select_y > e->cursor_y ? e->select_y : e->cursor_y;
-    int min_x, max_x;
-    if (min_y == max_y) { // Selection all on one line
-        min_x = e->select_x < e->cursor_x ? e->select_x : e->cursor_x;
-        max_x = e->select_x > e->cursor_x ? e->select_x : e->cursor_x;
-    } else { // Selection on multiple lines
-        min_x = min_y == e->select_y ? e->select_x : e->cursor_x;
-        max_x = max_y == e->select_y ? e->select_x : e->cursor_x;
-    }
+    int min_x, min_y, max_x, max_y;
+    selection_range(e, &min_x, &min_y, &max_x, &max_y);
     if (line_idx < min_y || line_idx > max_y) { // Not in the selection
         return 0;
     } else if (min_y == max_y) { // Selection all on one line
@@ -385,8 +407,8 @@ static void end_selection(Editor *e) {
 }
 
 static void start_selection(Editor *e) {
-    if (e->select_x == -1 || e->select_y == -1) {
-        e->select_x = e->cursor_x;
+    if (!has_selection(e)) { // If nothing already selected
+        e->select_x = e->cursor_x; // Start selection at cursor
         e->select_y = e->cursor_y;
     }
 }
@@ -409,6 +431,37 @@ static void delete_line(Editor *e, int line_idx) {
         memcpy(dst, dst + 1, sizeof(Line *) * remaining);
     }
     e->num_lines--;
+}
+
+static void delete_range(Editor *e,
+                         int min_x, int min_y,
+                         int max_x, int max_y) {
+    if (min_y == max_y) { // All on one line
+        Line *line = e->lines[min_y];
+        int remaining = line->len - max_x;
+        if (remaining > 0) {
+            memcpy(&line->s[min_x], &line->s[max_x], sizeof(char) * remaining);
+        }
+        line->len -= max_x - min_x;
+    } else { // Across multiple lines
+        Line *first = e->lines[min_y]; // First line
+        first->len = min_x; // Delete to end of line
+
+        for (int y = min_y + 1; y < max_y; y++) { // Lines in between
+            delete_line(e, y);
+        }
+
+        Line *last = e->lines[max_y]; // Last line
+        int remaining = last->len - max_x;
+        increase_line_capacity(e, min_y, remaining);
+        first = e->lines[min_y]; // In case 'realloc' is called
+        if (remaining > 0) {
+            // Copy remaining text onto the end of the first line
+            memcpy(&first->s[min_x], &last->s[max_x], sizeof(char) * remaining);
+            first->len += remaining;
+        }
+        delete_line(e, max_y);
+    }
 }
 
 static void insert_line(Editor *e, int after_idx, Line *to_insert) {
@@ -452,29 +505,39 @@ static void new_line(Editor *e) {
     correct_scroll(e);
 }
 
-static void backspace(Editor *e) {
-    Line *line = e->lines[e->cursor_y];
+static void backspace_char(Editor *e) {
     if (e->cursor_x == 0) { // Start of line
         if (e->cursor_y == 0) {
             return; // Start of file
         }
-        increase_line_capacity(e, e->cursor_y - 1, line->len);
         Line *prev = e->lines[e->cursor_y - 1];
         set_cursor_x(e, prev->len);
-        memcpy(&prev->s[prev->len], line->s, sizeof(char) * line->len);
-        prev->len += line->len;
-        delete_line(e, e->cursor_y);
+        delete_range(e, prev->len, e->cursor_y - 1, 0, e->cursor_y);
         e->cursor_y--;
         correct_scroll(e);
     } else { // Middle of line
-        int remaining = line->len - e->cursor_x;
-        if (remaining > 0) {
-            char *dst = &line->s[e->cursor_x];
-            memcpy(dst - 1, dst, sizeof(char) * remaining);
-        }
-        line->len--;
+        delete_range(e, e->cursor_x - 1, e->cursor_y, e->cursor_x, e->cursor_y);
         set_cursor_x(e, e->cursor_x - 1);
         correct_horizontal_scroll(e);
+    }
+}
+
+static void backspace_selection(Editor *e) {
+    int min_x, min_y, max_x, max_y;
+    selection_range(e, &min_x, &min_y, &max_x, &max_y);
+    delete_range(e, min_x, min_y, max_x, max_y);
+
+    end_selection(e);
+    set_cursor_x(e, min_x);
+    e->cursor_y = min_y;
+    correct_scroll(e);
+}
+
+static void backspace(Editor *e) {
+    if (has_selection(e)) {
+        backspace_selection(e);
+    } else {
+        backspace_char(e);
     }
 }
 
@@ -497,6 +560,9 @@ static void shift_line_down(Editor *e) {
     e->lines[e->cursor_y] = swap;
     e->cursor_y++;
 }
+
+
+// ---- Event Handling --------------------------------------------------------
 
 static void handle_key(Editor *e, struct tb_event ev) {
     // Start/end selections
