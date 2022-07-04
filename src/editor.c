@@ -50,6 +50,8 @@ Editor editor_new() {
     e.cursor_x = 0;
     e.cursor_y = 0;
     e.prev_cursor_x = -1;
+    e.select_x = 0;
+    e.select_y = 0;
     e.num_lines = 0;
     e.max_lines = 16;
     e.lines = malloc(sizeof(Line) * e.max_lines);
@@ -100,16 +102,43 @@ Editor editor_open(char *path) {
 // ---- Drawing ---------------------------------------------------------------
 
 static void editor_draw_cursor(Editor *e) {
+    if (e->select_x != -1) {
+        return; // Don't draw the cursor in selection mode
+    }
     int rel_x = e->cursor_x - e->scroll_x;
     int rel_y = e->cursor_y - e->scroll_y;
     tb_set_cursor(rel_x, rel_y);
 }
 
+static int editor_is_in_selection(Editor *e, int ch_idx, int line_idx) {
+    if (e->select_x == -1 || e->select_y == -1) { // No selection
+        return 0;
+    }
+    int min_y = e->select_y < e->cursor_y ? e->select_y : e->cursor_y;
+    int max_y = e->select_y > e->cursor_y ? e->select_y : e->cursor_y;
+    int min_x, max_x;
+    if (min_y == max_y) { // Selection all on one line
+        min_x = e->select_x < e->cursor_x ? e->select_x : e->cursor_x;
+        max_x = e->select_x > e->cursor_x ? e->select_x : e->cursor_x;
+    } else { // Selection on multiple lines
+        min_x = min_y == e->select_y ? e->select_x : e->cursor_x;
+        max_x = max_y == e->select_y ? e->select_x : e->cursor_x;
+    }
+    if (line_idx < min_y || line_idx > max_y) { // Not in the selection
+        return 0;
+    } else if (min_y == max_y) { // Selection all on one line
+        return line_idx == min_y && ch_idx >= min_x && ch_idx < max_x;
+    } else if (line_idx == min_y) { // On first line of selection
+        return ch_idx >= min_x;
+    } else if (line_idx == max_y) { // On last line of selection
+        return ch_idx < max_x;
+    } else { // In the middle of the selection
+        return 1;
+    }
+}
+
 static void editor_draw_line(Editor *e, int y) {
     int line_idx = y + e->scroll_y;
-    if (line_idx >= e->num_lines) {
-        return;
-    }
     Line *line = e->lines[line_idx];
     if (line->len == 0) {
         return;
@@ -117,11 +146,22 @@ static void editor_draw_line(Editor *e, int y) {
     int width = tb_width();
     for (int x = 0; x < width; x++) {
         int ch_idx = x + e->scroll_x;
-        if (ch_idx >= line->len) {
-            break;
+        if (ch_idx > line->len) {
+            break; // Don't draw beyond the line
         }
-        char c = line->s[ch_idx];
-        tb_set_cell(x, y, c, TB_DEFAULT, TB_DEFAULT);
+        char ch;
+        if (ch_idx < line->len) {
+            ch = line->s[ch_idx];
+        } else {
+            ch = ' ';
+        }
+        uintattr_t fg = TB_DEFAULT;
+        uintattr_t bg = TB_DEFAULT;
+        if (editor_is_in_selection(e, ch_idx, line_idx)) {
+            fg = TB_BLACK;
+            bg = TB_WHITE;
+        }
+        tb_set_cell(x, y, ch, fg, bg);
     }
 }
 
@@ -129,6 +169,9 @@ void editor_draw(Editor *e) {
     tb_clear();
     int height = tb_height();
     for (int y = 0; y < height; y++) {
+        if (y + e->scroll_y >= e->num_lines) {
+            break; // Last line
+        }
         editor_draw_line(e, y);
     }
     editor_draw_cursor(e);
@@ -433,7 +476,14 @@ static void editor_shift_line_down(Editor *e) {
 }
 
 static void editor_key(Editor *e, struct tb_event ev) {
-    if (ev.mod == TB_MOD_ALT) {
+    if (ev.mod == TB_MOD_SHIFT) {
+//        switch (ev.key) {
+//            case TB_KEY_ARROW_LEFT:  editor_select_left(e); return;
+//            case TB_KEY_ARROW_RIGHT: editor_select_right(e); return;
+//            case TB_KEY_ARROW_UP:    editor_select_up(e); return;
+//            case TB_KEY_ARROW_DOWN:  editor_select_down(e); return;
+//        }
+    } else if (ev.mod == TB_MOD_ALT) {
         switch (ev.key) {
             // Movement
             case TB_KEY_ARROW_LEFT:  editor_cursor_prev_word(e); return;
