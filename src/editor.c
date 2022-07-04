@@ -10,6 +10,63 @@ static Line * empty_line() {
     return empty;
 }
 
+static Theme default_theme() {
+    Theme t;
+    t.text_fg = TB_DEFAULT;
+    t.text_bg = TB_DEFAULT;
+    t.selection_fg = TB_BLACK;
+    t.selection_bg = TB_WHITE;
+    t.highlight_line = 1;
+    t.highlight_fg = TB_BLACK;
+    t.highlight_bg = TB_WHITE;
+    t.show_gutter = 1;
+    t.gutter_fg = TB_YELLOW;
+    t.gutter_bg = TB_DEFAULT;
+    t.show_info_bar = 1;
+    t.info_bar_fg = TB_BLUE;
+    t.info_bar_bg = TB_DEFAULT;
+    return t;
+}
+
+Editor editor_new() {
+    Editor e;
+    e.run = 1;
+    e.path = NULL;
+    e.scroll_x = 0;
+    e.scroll_y = 0;
+    e.cursor_x = 0;
+    e.cursor_y = 0;
+    e.prev_cursor_x = -1;
+    e.select_x = -1;
+    e.select_y = -1;
+    e.num_lines = 0;
+    e.max_lines = 16;
+    e.lines = malloc(sizeof(Line) * e.max_lines);
+    e.lines[e.num_lines++] = empty_line();
+    e.theme = default_theme();
+    return e;
+}
+
+static void increase_line_capacity(Editor *e, int line_idx, int more) {
+    Line *line = e->lines[line_idx];
+    if (line->len + more > line->max) {
+        while (line->len + more > line->max) {
+            line->max *= 2;
+        }
+        line = realloc(line, sizeof(Line) + sizeof(char) * line->max);
+        e->lines[line_idx] = line;
+    }
+}
+
+static void increase_lines_capacity(Editor *e, int more) {
+    if (e->num_lines + more > e->max_lines) {
+        while (e->num_lines + more > e->max_lines) {
+            e->max_lines *= 2;
+        }
+        e->lines = realloc(e->lines, sizeof(Line **) * e->max_lines);
+    }
+}
+
 static int next_pow2(int num) {
     num--;
     int pow = 2;
@@ -29,44 +86,6 @@ static Line * line_from(char *str, int len) {
     line->max = capacity;
     memcpy(line->s, str, sizeof(char) * len);
     return line;
-}
-
-static void increase_line_capacity(Editor *e, int line_idx, int more) {
-    Line *line = e->lines[line_idx];
-    if (line->len + more > line->max) {
-        while (line->len + more > line->max) {
-            line->max *= 2;
-        }
-        line = realloc(line, sizeof(Line) + sizeof(char) * line->max);
-        e->lines[line_idx] = line;
-    }
-}
-
-Editor editor_new() {
-    Editor e;
-    e.path = NULL;
-    e.scroll_x = 0;
-    e.scroll_y = 0;
-    e.cursor_x = 0;
-    e.cursor_y = 0;
-    e.prev_cursor_x = -1;
-    e.select_x = -1;
-    e.select_y = -1;
-    e.num_lines = 0;
-    e.max_lines = 16;
-    e.lines = malloc(sizeof(Line) * e.max_lines);
-    e.lines[e.num_lines++] = empty_line();
-    e.run = 1;
-    return e;
-}
-
-static void increase_lines_capacity(Editor *e, int more) {
-    if (e->num_lines + more > e->max_lines) {
-        while (e->num_lines + more > e->max_lines) {
-            e->max_lines *= 2;
-        }
-        e->lines = realloc(e->lines, sizeof(Line **) * e->max_lines);
-    }
 }
 
 Editor editor_open(char *path) {
@@ -131,16 +150,6 @@ static void selection_range(Editor *e,
     if (max_y) { *max_y = y2; }
 }
 
-static void draw_cursor(Editor *e) {
-    if (has_selection(e)) {
-        tb_hide_cursor(); // Don't draw the cursor in selection mode
-        return;
-    }
-    int rel_x = e->cursor_x - e->scroll_x;
-    int rel_y = e->cursor_y - e->scroll_y;
-    tb_set_cursor(rel_x, rel_y);
-}
-
 static int is_in_selection(Editor *e, int ch_idx, int line_idx) {
     if (!has_selection(e)) { // No selection
         return 0;
@@ -158,6 +167,16 @@ static int is_in_selection(Editor *e, int ch_idx, int line_idx) {
     } else { // In the middle of the selection
         return 1;
     }
+}
+
+static void draw_cursor(Editor *e) {
+    if (has_selection(e)) {
+        tb_hide_cursor(); // Don't draw the cursor in selection mode
+        return;
+    }
+    int rel_x = e->cursor_x - e->scroll_x;
+    int rel_y = e->cursor_y - e->scroll_y;
+    tb_set_cursor(rel_x, rel_y);
 }
 
 static void draw_line(Editor *e, int y) {
@@ -178,11 +197,13 @@ static void draw_line(Editor *e, int y) {
         } else {
             ch = ' ';
         }
-        uintattr_t fg = TB_DEFAULT;
-        uintattr_t bg = TB_DEFAULT;
+        uintattr_t fg, bg;
         if (is_in_selection(e, ch_idx, line_idx)) {
-            fg = TB_BLACK;
-            bg = TB_WHITE;
+            fg = e->theme.selection_fg;
+            bg = e->theme.selection_bg;
+        } else {
+            fg = e->theme.text_fg;
+            bg = e->theme.text_bg;
         }
         tb_set_cell(x, y, ch, fg, bg);
     }
@@ -338,8 +359,8 @@ static int find_prev_word(Editor *e) {
     }
     int sep = is_word_sep(line->s[x]);
     while (is_word_sep(line->s[x]) == sep &&
-            !isspace(line->s[x]) &&
-            x >= 0) {
+           !isspace(line->s[x]) &&
+           x >= 0) {
         x--; // 3 + 4
     }
     x++;
@@ -378,8 +399,8 @@ static int find_next_word(Editor *e) {
     }
     int sep = is_word_sep(line->s[x]);
     while (is_word_sep(line->s[x]) == sep &&
-            !isspace(line->s[x]) &&
-            x < line->len) {
+           !isspace(line->s[x]) &&
+           x < line->len) {
         x++; // 3 + 4
     }
     return x;
@@ -497,8 +518,8 @@ static void backspace_selection(Editor *e) {
 
 static void backspace_char(Editor *e) {
     if (e->cursor_x == 0) { // Start of line
-        if (e->cursor_y == 0) {
-            return; // Start of file
+        if (e->cursor_y == 0) { // Start of file
+            return;
         }
         Line *prev = e->lines[e->cursor_y - 1];
         set_cursor_x(e, prev->len);
