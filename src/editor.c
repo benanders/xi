@@ -413,6 +413,22 @@ static void start_selection(Editor *e) {
     }
 }
 
+static void end_selection_left(Editor *e) {
+    int min_x, min_y;
+    selection_range(e, &min_x, &min_y, NULL, NULL);
+    end_selection(e);
+    e->cursor_y = min_y;
+    set_cursor_x(e, min_x);
+}
+
+static void end_selection_right(Editor *e) {
+    int max_x, max_y;
+    selection_range(e, NULL, NULL, &max_x, &max_y);
+    end_selection(e);
+    e->cursor_y = max_y;
+    set_cursor_x(e, max_x);
+}
+
 static void check_for_empty_selection(Editor *e) {
     // End selection if nothing selected
     if (e->select_x == e->cursor_x && e->select_y == e->cursor_y) {
@@ -440,7 +456,9 @@ static void delete_range(Editor *e,
         Line *line = e->lines[min_y];
         int remaining = line->len - max_x;
         if (remaining > 0) {
-            memcpy(&line->s[min_x], &line->s[max_x], sizeof(char) * remaining);
+            char *dst = &line->s[min_x];
+            char *src = &line->s[max_x];
+            memcpy(dst, src, sizeof(char) * remaining);
         }
         line->len -= max_x - min_x;
     } else { // Across multiple lines
@@ -457,51 +475,23 @@ static void delete_range(Editor *e,
         first = e->lines[min_y]; // In case 'realloc' is called
         if (remaining > 0) {
             // Copy remaining text onto the end of the first line
-            memcpy(&first->s[min_x], &last->s[max_x], sizeof(char) * remaining);
+            char *dst = &first->s[min_x];
+            char *src = &last->s[max_x];
+            memcpy(dst, src, sizeof(char) * remaining);
             first->len += remaining;
         }
         delete_line(e, max_y);
     }
 }
 
-static void insert_line(Editor *e, int after_idx, Line *to_insert) {
-    increase_lines_capacity(e, 1);
-    int remaining = e->num_lines - after_idx - 1;
-    if (remaining > 0) {
-        Line **src = &e->lines[after_idx + 1];
-        memcpy(src + 1, src, sizeof(Line *) * remaining);
-    }
-    e->lines[after_idx + 1] = to_insert;
-    e->num_lines++;
-}
+static void backspace_selection(Editor *e) {
+    int min_x, min_y, max_x, max_y;
+    selection_range(e, &min_x, &min_y, &max_x, &max_y);
+    delete_range(e, min_x, min_y, max_x, max_y);
 
-static void insert_char(Editor *e, char ch) {
-    increase_line_capacity(e, e->cursor_y, 1);
-    Line *line = e->lines[e->cursor_y];
-    int remaining = line->len - e->cursor_x;
-    if (remaining > 0) {
-        char *src = &line->s[e->cursor_x];
-        memcpy(src + 1, src, sizeof(char) * remaining);
-    }
-    line->s[e->cursor_x] = ch;
-    line->len++;
-    set_cursor_x(e, e->cursor_x + 1);
-    correct_horizontal_scroll(e);
-}
-
-static void new_line(Editor *e) {
-    Line *line = e->lines[e->cursor_y];
-    int remaining = line->len - e->cursor_x;
-    Line *to_insert;
-    if (remaining > 0) {
-        to_insert = line_from(&line->s[e->cursor_x], remaining);
-    } else {
-        to_insert = empty_line();
-    }
-    line->len = e->cursor_x;
-    insert_line(e, e->cursor_y, to_insert);
-    e->cursor_y++;
-    set_cursor_x(e, 0);
+    end_selection(e);
+    set_cursor_x(e, min_x);
+    e->cursor_y = min_y;
     correct_scroll(e);
 }
 
@@ -522,23 +512,59 @@ static void backspace_char(Editor *e) {
     }
 }
 
-static void backspace_selection(Editor *e) {
-    int min_x, min_y, max_x, max_y;
-    selection_range(e, &min_x, &min_y, &max_x, &max_y);
-    delete_range(e, min_x, min_y, max_x, max_y);
-
-    end_selection(e);
-    set_cursor_x(e, min_x);
-    e->cursor_y = min_y;
-    correct_scroll(e);
-}
-
 static void backspace(Editor *e) {
     if (has_selection(e)) {
         backspace_selection(e);
     } else {
         backspace_char(e);
     }
+}
+
+static void type_char(Editor *e, char ch) {
+    if (has_selection(e)) {
+        backspace_selection(e);
+    }
+    increase_line_capacity(e, e->cursor_y, 1);
+    Line *line = e->lines[e->cursor_y];
+    int remaining = line->len - e->cursor_x;
+    if (remaining > 0) {
+        char *src = &line->s[e->cursor_x];
+        memcpy(src + 1, src, sizeof(char) * remaining);
+    }
+    line->s[e->cursor_x] = ch;
+    line->len++;
+    set_cursor_x(e, e->cursor_x + 1);
+    correct_horizontal_scroll(e);
+}
+
+static void insert_line(Editor *e, int after_idx, Line *to_insert) {
+    increase_lines_capacity(e, 1);
+    int remaining = e->num_lines - after_idx - 1;
+    if (remaining > 0) {
+        Line **src = &e->lines[after_idx + 1];
+        memcpy(src + 1, src, sizeof(Line *) * remaining);
+    }
+    e->lines[after_idx + 1] = to_insert;
+    e->num_lines++;
+}
+
+static void new_line(Editor *e) {
+    if (has_selection(e)) {
+        backspace_selection(e);
+    }
+    Line *line = e->lines[e->cursor_y];
+    int remaining = line->len - e->cursor_x;
+    Line *to_insert;
+    if (remaining > 0) {
+        to_insert = line_from(&line->s[e->cursor_x], remaining);
+    } else {
+        to_insert = empty_line();
+    }
+    line->len = e->cursor_x;
+    insert_line(e, e->cursor_y, to_insert);
+    e->cursor_y++;
+    set_cursor_x(e, 0);
+    correct_scroll(e);
 }
 
 static void shift_line_up(Editor *e) {
@@ -565,19 +591,21 @@ static void shift_line_down(Editor *e) {
 // ---- Event Handling --------------------------------------------------------
 
 static void handle_key(Editor *e, struct tb_event ev) {
-    // Start/end selections
-    switch (ev.key) {
-    case TB_KEY_ARROW_LEFT:
-    case TB_KEY_ARROW_RIGHT:
-    case TB_KEY_ARROW_UP:
-    case TB_KEY_ARROW_DOWN:
-        if (ev.mod & TB_MOD_SHIFT) {
-            start_selection(e);
-        } else {
-            end_selection(e);
+    if (ev.mod & TB_MOD_SHIFT) { // Start selection
+        switch (ev.key) {
+            case TB_KEY_ARROW_LEFT:
+            case TB_KEY_ARROW_RIGHT:
+            case TB_KEY_ARROW_UP:
+            case TB_KEY_ARROW_DOWN: start_selection(e); break;
+        } // Fall through to movement commands...
+    } else if (has_selection(e)) { // End selection
+        switch (ev.key) {
+            case TB_KEY_ARROW_LEFT:  end_selection_left(e); return;
+            case TB_KEY_ARROW_RIGHT: end_selection_right(e); return;
+            case TB_KEY_ARROW_UP:    end_selection_left(e); break;  // Fall
+            case TB_KEY_ARROW_DOWN:  end_selection_right(e); break; // through
         }
-        break;
-    } // Fall through to movement commands...
+    }
 
     if (ev.mod & TB_MOD_CTRL) { // Ctrl takes precedence over alt
         switch (ev.key) {
@@ -619,7 +647,7 @@ static void handle_key(Editor *e, struct tb_event ev) {
 
 static void handle_char(Editor *e, struct tb_event ev) {
     if (ev.ch < 256) { // ASCII support only for now
-        insert_char(e, (char) ev.ch);
+        type_char(e, (char) ev.ch);
     }
 }
 
